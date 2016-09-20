@@ -5,6 +5,7 @@ import json
 import sys
 import csv
 import xml.etree.ElementTree as ET
+from pysolr import SolrError
 from watson_developer_cloud import RetrieveAndRankV1
 
 
@@ -16,20 +17,29 @@ def get_retrieve_and_rank(username, password):
 
 
 def index_documents(retrieve_and_rank, solr_cluster_id, collection_name, docs):
-    status = {}
+    status = ""
     try:
         pysolr_client = retrieve_and_rank.get_pysolr_client(solr_cluster_id, collection_name)
         client_resp = pysolr_client.add(docs)
         root = ET.fromstring(client_resp)
         stat = root.find('./lst/int[@name="status"]')
         if stat is not None and stat.text == "0":
-            status["status"] = "success"
+            status = "success"
         else:
-            status["status"] = "error"
+            status = "error"
+    except SolrError as err:
+        status = "error: %s" % err
     except:
-        print sys.exc_info()
-        status["status"] = "error"
+        error_info = sys.exc_info()[1]
+        status  = "error: %s" % error_info
     return status
+
+
+def build_search_doc(docs):
+    sdocs = []
+    for key in docs.keys():
+        sdocs.append(docs[key])
+    return sdocs
 
 
 def main():
@@ -42,19 +52,29 @@ def main():
     parser.add_argument("-c", "--solr_collection", required=True, dest="collection",
                         help="Retrive and Rank solr collection name")
     args = parser.parse_args()
-    docs = []
     retrieve_and_rank = get_retrieve_and_rank(args.username, args.password)
+    docs = {}
     with open(args.filename, "r") as f:
         freader = csv.reader(f, delimiter='\t')
         for row in freader:
-            doc = dict()
-            doc["id"] = row[0]
-            doc["title"] = row[1]
-            doc["bugid"] = row[1]
-            doc["body"] = row[2]
-            docs.append(doc)
-    status = index_documents(retrieve_and_rank, args.cluster, args.collection, docs)
-    print "index status - " + json.dumps(status)
+            source = row[0]
+            bugid = row[1]
+            body = row[2]
+            if bugid in docs:
+                doc = docs.get(bugid)
+                doc["body"] = doc["body"] + "\n" + body
+                doc["source"].append(source)
+            else:
+                docs[bugid] = {
+                    "id": bugid,
+                    "bugid": bugid,
+                    "title": bugid,
+                    "body": body ,
+                    "source": [source]
+                }
+    search_docs = build_search_doc(docs)
+    status = index_documents(retrieve_and_rank, args.cluster, args.collection, search_docs)
+    print "index status - %s" % status
 
 
 if __name__ == '__main__':
